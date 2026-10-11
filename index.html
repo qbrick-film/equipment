@@ -200,13 +200,21 @@
   <div id="loginView">
     <div class="box">
       <h2>映画研究部 機材管理システム</h2>
-      <p class="muted">合言葉と学籍番号を入力してください。</p>
+      <p class="muted">学籍番号と合言葉を入力してください。</p>
       <p class="muted">※初回ログイン時は少し時間がかかることがあります。しばらくお待ちください。</p>
-      <label>合言葉</label><input type="password" id="loginPassword" autocomplete="current-password">
-      <label>学籍番号</label><input type="text" id="loginStudentId" placeholder="例: 123m4567" autocomplete="username">
-      <div class="rowActions"><button id="loginBtn" style="width:100%">ログイン</button></div>
+      <!-- パスワードマネージャー(iPhoneのパスワード・Chromeなど)に保存・自動入力してもらうため、
+           上に学籍番号(username)、下に合言葉(current-password)を置いた form にしている。
+           Safariなどは form が実際に送信されたときに保存するか聞くので、送信は止めずに
+           見えない iframe(about:blank)へ送る(ページは移動せず、どこにも送られない)。
+           実際のログインは submit のときに attemptLogin が行う -->
+      <form id="loginForm" method="post" action="about:blank" target="loginSink">
+        <label for="loginStudentId">学籍番号</label><input type="text" id="loginStudentId" name="username" placeholder="例: 123m4567" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required>
+        <label for="loginPassword">合言葉</label><input type="password" id="loginPassword" name="password" autocomplete="current-password" required>
+        <div class="rowActions"><button type="submit" id="loginBtn" style="width:100%">ログイン</button></div>
+      </form>
+      <iframe name="loginSink" src="about:blank" title="" tabindex="-1" aria-hidden="true" hidden></iframe>
       <div class="errorMsg" id="loginError"></div>
-      <div class="rowActions"><button class="secondary" id="publicViewBtn" style="width:100%">ログインせずに閲覧する</button></div>
+      <div class="rowActions"><button type="button" class="secondary" id="publicViewBtn" style="width:100%">ログインせずに閲覧する</button></div>
     </div>
     <div id="loginNotice" class="noticeBox" hidden></div>
   </div>
@@ -346,6 +354,16 @@
       try { localStorage.removeItem(AUTH_STORAGE_KEY); } catch (e) { /* ignore */ }
     }
 
+    // Chrome・Edge(Androidを含む)に、ログインできた学籍番号と合言葉を保存するか聞いてもらう。
+    // Safariなどは loginForm の送信で聞くので、ここでは何もしない(PasswordCredential が無い)
+    function offerToSaveLogin(auth) {
+      if (!window.PasswordCredential || !navigator.credentials) return;
+      try {
+        navigator.credentials.store(new PasswordCredential({ id: auth.studentId, password: auth.password }))
+          .catch(function () { /* 保存されなくてもログインには関係ない */ });
+      } catch (e) { /* ignore */ }
+    }
+
     function attemptLogin(auth, silent) {
       var errEl = document.getElementById('loginError');
       if (errEl) errEl.textContent = '';
@@ -363,6 +381,7 @@
           saveAuth(auth);
           CURRENT_MEMBER = result.member;
           initApp(result.initialData, { readOnly: false });
+          if (!silent) offerToSaveLogin(auth);
         })
         .catch(function (err) {
           if (!silent) { btn.disabled = false; btn.textContent = originalLabel; }
@@ -404,7 +423,8 @@
     }
 
     document.addEventListener('DOMContentLoaded', function () {
-      document.getElementById('loginBtn').addEventListener('click', function () {
+      // ボタンを押しても、入力欄で Enter を押しても送信になる。送信は止めない(form の説明を参照)
+      document.getElementById('loginForm').addEventListener('submit', function () {
         attemptLogin({
           password: document.getElementById('loginPassword').value,
           studentId: document.getElementById('loginStudentId').value.trim()
