@@ -202,17 +202,15 @@
       <h2>映画研究部 機材管理システム</h2>
       <p class="muted">学籍番号と合言葉を入力してください。</p>
       <p class="muted">※初回ログイン時は少し時間がかかることがあります。しばらくお待ちください。</p>
-      <!-- パスワードマネージャー(iPhoneのパスワード・Chromeなど)に保存・自動入力してもらうため、
-           上に学籍番号(username)、下に合言葉(current-password)を置いた form にしている。
-           Safariなどは form が実際に送信されたときに保存するか聞くので、送信は止めずに
-           見えない iframe(about:blank)へ送る(ページは移動せず、どこにも送られない)。
-           実際のログインは submit のときに attemptLogin が行う -->
-      <form id="loginForm" method="post" action="about:blank" target="loginSink">
+      <!-- 上に学籍番号(username)、下に合言葉(current-password)。パスワードマネージャーに保存済みなら
+           自動入力される。ログイン情報はこのアプリが localStorage に覚えて、次から自動でログインするので、
+           ブラウザに保存を勧めることはしない(送信は止めて fetch でログインし、ログインできたら入力欄を空にする。
+           以前は保存を聞かせる作りにしたが、ログインのたびに聞かれてくどかったのでやめた) -->
+      <form id="loginForm">
         <label for="loginStudentId">学籍番号</label><input type="text" id="loginStudentId" name="username" placeholder="例: 123m4567" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required>
         <label for="loginPassword">合言葉</label><input type="password" id="loginPassword" name="password" autocomplete="current-password" required>
         <div class="rowActions"><button type="submit" id="loginBtn" style="width:100%">ログイン</button></div>
       </form>
-      <iframe name="loginSink" src="about:blank" title="" tabindex="-1" aria-hidden="true" hidden></iframe>
       <div class="errorMsg" id="loginError"></div>
       <div class="rowActions"><button type="button" class="secondary" id="publicViewBtn" style="width:100%">ログインせずに閲覧する</button></div>
     </div>
@@ -354,47 +352,44 @@
       try { localStorage.removeItem(AUTH_STORAGE_KEY); } catch (e) { /* ignore */ }
     }
 
-    // Chrome・Edge(Androidを含む)に、ログインできた学籍番号と合言葉を保存するか聞いてもらう。
-    // Safariなどは loginForm の送信で聞くので、ここでは何もしない(PasswordCredential が無い)
-    function offerToSaveLogin(auth) {
-      if (!window.PasswordCredential || !navigator.credentials) return;
-      try {
-        navigator.credentials.store(new PasswordCredential({ id: auth.studentId, password: auth.password }))
-          .catch(function () { /* 保存されなくてもログインには関係ない */ });
-      } catch (e) { /* ignore */ }
+    function fillLoginForm(auth) {
+      document.getElementById('loginStudentId').value = auth.studentId || '';
+      document.getElementById('loginPassword').value = auth.password || '';
     }
 
+    // silent: 覚えておいた情報での自動ログイン(入力欄に入れて見せ、「前回の情報で…」と出す)
     function attemptLogin(auth, silent) {
       var errEl = document.getElementById('loginError');
       if (errEl) errEl.textContent = '';
       var btn = document.getElementById('loginBtn');
       var originalLabel = btn.textContent;
-      if (!silent) {
-        btn.disabled = true;
-        btn.textContent = 'ログイン中...しばらくお待ちください';
-      }
+      if (silent) fillLoginForm(auth);
+      btn.disabled = true;
+      btn.textContent = silent ? '前回の情報でログインしています...' : 'ログイン中...しばらくお待ちください';
 
       AUTH = auth;
       callApi('login', {})
         .then(function (result) {
-          if (!silent) { btn.disabled = false; btn.textContent = originalLabel; }
+          btn.disabled = false; btn.textContent = originalLabel;
           saveAuth(auth);
+          // 入力欄は空にしておく(合言葉の入った欄が残ると、あとでブラウザが保存を聞くことがあるため)
+          fillLoginForm({});
           CURRENT_MEMBER = result.member;
           initApp(result.initialData, { readOnly: false });
-          if (!silent) offerToSaveLogin(auth);
         })
         .catch(function (err) {
-          if (!silent) { btn.disabled = false; btn.textContent = originalLabel; }
+          btn.disabled = false; btn.textContent = originalLabel;
           // サーバーがはっきり拒否した場合(合言葉違い・未登録の学籍番号)だけ
           // 保存済みの認証情報を消す。通信そのものの失敗では、情報自体は
           // 正しい可能性が高いので残しておき、再入力の手間を増やさない。
           if (err && err.fromServer) {
             clearAuth();
+            // 覚えていた合言葉が古かった場合など：学籍番号は残し、合言葉だけ入れ直してもらう
+            if (silent) document.getElementById('loginPassword').value = '';
           } else {
             // 次に手動でログインボタンを押すだけで再試行できるよう、
             // 保存されている値をフォームに入れておく
-            document.getElementById('loginPassword').value = auth.password || '';
-            document.getElementById('loginStudentId').value = auth.studentId || '';
+            fillLoginForm(auth);
           }
           document.getElementById('loginView').hidden = false;
           document.getElementById('appView').hidden = true;
@@ -423,8 +418,9 @@
     }
 
     document.addEventListener('DOMContentLoaded', function () {
-      // ボタンを押しても、入力欄で Enter を押しても送信になる。送信は止めない(form の説明を参照)
-      document.getElementById('loginForm').addEventListener('submit', function () {
+      // ボタンを押しても、入力欄で Enter を押してもログインする。form の送信そのものは止める(ページを移動しない)
+      document.getElementById('loginForm').addEventListener('submit', function (e) {
+        e.preventDefault();
         attemptLogin({
           password: document.getElementById('loginPassword').value,
           studentId: document.getElementById('loginStudentId').value.trim()
