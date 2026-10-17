@@ -292,15 +292,32 @@
     // ============================================================
     // API呼び出し(GASのdoPostをfetchで叩く。google.script.runは使えない)
     // ============================================================
+    // fetch自体にはタイムアウトが無く、学内Wi-Fi等で通信が途中で黙って止まると
+    // ブラウザが諦めるまで(数分)「ログイン中...」のまま動かなくなる。
+    // 普段は2秒前後で返るので、これだけ待って返事が無ければ打ち切る。
+    var API_TIMEOUT_MS = 30000;
+
     function callApiOnce(action, payload) {
+      var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      var timer = controller ? setTimeout(function () { controller.abort(); }, API_TIMEOUT_MS) : null;
       return fetch(API_URL, {
         method: 'POST',
         // Content-Typeはtext/plainのままにすること(application/jsonにすると
         // CORSのプリフライトが発生し、GASのWebアプリはdoOptionsを持たないため失敗する)
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ auth: AUTH, action: action, payload: payload || {} })
+        body: JSON.stringify({ auth: AUTH, action: action, payload: payload || {} }),
+        signal: controller ? controller.signal : undefined
       }).then(function (res) {
         return res.json();
+      }).catch(function (err) {
+        if (err && err.name === 'AbortError') {
+          var e = new Error('サーバーから応答がありません。');
+          e.timedOut = true;
+          throw e;
+        }
+        throw err;
+      }).finally(function () {
+        if (timer) clearTimeout(timer);
       }).then(function (json) {
         if (!json.ok) {
           // サーバー側が明示的に返したエラー(合言葉違い等)。既に日本語なのでそのまま伝える
@@ -321,6 +338,12 @@
       if (retriesLeft === undefined) retriesLeft = 3;
       return callApiOnce(action, payload).catch(function (err) {
         if (err && err.fromServer) throw err;
+        // 30秒待っても返事が無いのは、すぐ再試行しても直らないことがほとんど。
+        // 書き込み系はサーバー側で処理済みの可能性もあるので、二重登録を避けるためにも再試行しない
+        if (err && err.timedOut) {
+          throw new Error('サーバーから応答がありません。Wi-Fiを切ってモバイル回線にするなど、別のネットワークでお試しください。' +
+            '(保存などの操作だった場合は、ページを再読み込みして反映されているか確認してください)');
+        }
         if (retriesLeft > 0) {
           var wait = (4 - retriesLeft) * 1000; // 1秒,2秒,3秒と間隔を広げる
           return new Promise(function (resolve) { setTimeout(resolve, wait); })
